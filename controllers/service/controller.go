@@ -1006,7 +1006,7 @@ var (
 		nodeIncludedPredicate,
 		nodeUnTaintedPredicate,
 		nodeReadyPredicate,
-		nodeTerminatingPredicate,
+		nodeNotTerminatingPredicate,
 	}
 	etpLocalNodePredicates []NodeConditionPredicate = []NodeConditionPredicate{
 		nodeIncludedPredicate,
@@ -1022,6 +1022,7 @@ var (
 		// excluded at that time and cause connections on said node to not
 		// connection drain.
 		nodeUnTaintedPredicate,
+		nodeNotTerminatingPredicate,
 	}
 )
 
@@ -1053,15 +1054,15 @@ func nodeUnTaintedPredicate(node *v1.Node) bool {
 
 const NodeTerminationCondition v1.NodeConditionType = "Terminating"
 
-// Returns true if the node is terminating, based on the Gardener condition.
+// Returns true if the node is not terminating, based on the Gardener condition.
 // https://github.com/gardener/machine-controller-manager/blob/fc341881a5e71d7c5f240ca73415f967084aa85b/pkg/util/provider/machineutils/utils.go#L61
-func nodeTerminatingPredicate(node *v1.Node) bool {
+func nodeNotTerminatingPredicate(node *v1.Node) bool {
 	for _, cond := range node.Status.Conditions {
 		if cond.Type == NodeTerminationCondition {
-			return cond.Status == v1.ConditionTrue
+			return cond.Status != v1.ConditionTrue
 		}
 	}
-	return false
+	return true
 }
 
 // We consider the node for load balancing only when its NodeReady condition status is ConditionTrue
