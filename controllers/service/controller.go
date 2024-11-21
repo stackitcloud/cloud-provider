@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -44,7 +43,6 @@ import (
 	servicehelper "k8s.io/cloud-provider/service/helpers"
 	"k8s.io/component-base/featuregate"
 	controllersmetrics "k8s.io/component-base/metrics/prometheus/controllers"
-	"k8s.io/controller-manager/pkg/features"
 	"k8s.io/klog/v2"
 )
 
@@ -714,10 +712,7 @@ func shouldSyncUpdatedNode(oldNode, newNode *v1.Node) bool {
 	if oldNode.Spec.ProviderID != newNode.Spec.ProviderID {
 		return true
 	}
-	if !utilfeature.DefaultFeatureGate.Enabled(features.StableLoadBalancerNodeSet) {
-		return respectsPredicates(oldNode, allNodePredicates...) != respectsPredicates(newNode, allNodePredicates...)
-	}
-	return false
+	return respectsPredicates(oldNode, allNodePredicates...) != respectsPredicates(newNode, allNodePredicates...)
 }
 
 // syncNodes handles updating the hosts pointed to by all load
@@ -1006,6 +1001,7 @@ var (
 		nodeIncludedPredicate,
 		nodeUnTaintedPredicate,
 		nodeReadyPredicate,
+		nodeNotTerminatingPredicate,
 	}
 	etpLocalNodePredicates []NodeConditionPredicate = []NodeConditionPredicate{
 		nodeIncludedPredicate,
@@ -1021,13 +1017,11 @@ var (
 		// excluded at that time and cause connections on said node to not
 		// connection drain.
 		nodeUnTaintedPredicate,
+		nodeNotTerminatingPredicate,
 	}
 )
 
 func getNodePredicatesForService(service *v1.Service) []NodeConditionPredicate {
-	if utilfeature.DefaultFeatureGate.Enabled(features.StableLoadBalancerNodeSet) {
-		return stableNodeSetPredicates
-	}
 	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
 		return etpLocalNodePredicates
 	}
@@ -1045,6 +1039,19 @@ func nodeUnTaintedPredicate(node *v1.Node) bool {
 	for _, taint := range node.Spec.Taints {
 		if taint.Key == ToBeDeletedTaint {
 			return false
+		}
+	}
+	return true
+}
+
+const NodeTerminationCondition v1.NodeConditionType = "Terminating"
+
+// Returns true if the node is not terminating, based on the Gardener condition.
+// https://github.com/gardener/machine-controller-manager/blob/fc341881a5e71d7c5f240ca73415f967084aa85b/pkg/util/provider/machineutils/utils.go#L61
+func nodeNotTerminatingPredicate(node *v1.Node) bool {
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == NodeTerminationCondition {
+			return cond.Status != v1.ConditionTrue
 		}
 	}
 	return true
