@@ -438,7 +438,7 @@ func (c *Controller) syncLoadBalancerIfNeeded(ctx context.Context, service *v1.S
 }
 
 func (c *Controller) ensureLoadBalancer(ctx context.Context, service *v1.Service) (*v1.LoadBalancerStatus, error) {
-	nodes, err := listWithPredicates(c.nodeLister, stableNodeSetPredicates...)
+	nodes, err := listWithPredicates(c.nodeLister, getNodePredicatesForService(service)...)
 	if err != nil {
 		return nil, err
 	}
@@ -706,7 +706,7 @@ func shouldSyncUpdatedNode(oldNode, newNode *v1.Node) bool {
 		return true
 	}
 
-	return false
+	return respectsPredicates(oldNode, allNodePredicates...) != respectsPredicates(newNode, allNodePredicates...)
 }
 
 // syncNodes handles updating the hosts pointed to by all load
@@ -745,8 +745,8 @@ func (c *Controller) nodeSyncService(svc *v1.Service) bool {
 		nodeSyncErrorCount.Inc()
 		return retNeedRetry
 	}
-	newNodes = filterWithPredicates(newNodes, stableNodeSetPredicates...)
-	oldNodes := filterWithPredicates(c.getLastSyncedNodes(svc), stableNodeSetPredicates...)
+	newNodes = filterWithPredicates(newNodes, getNodePredicatesForService(svc)...)
+	oldNodes := filterWithPredicates(c.getLastSyncedNodes(svc), getNodePredicatesForService(svc)...)
 	// Store last synced nodes without actually determining if we successfully
 	// synced them or not. Failed node syncs are passed off to retries in the
 	// service queue, so no need to wait. If we don't store it now, we risk
@@ -995,6 +995,13 @@ var (
 		nodeIncludedPredicate,
 		nodeUnTaintedPredicate,
 		nodeReadyPredicate,
+		nodeNotTerminatingPredicate,
+	}
+
+	etpLocalNodePredicates []NodeConditionPredicate = []NodeConditionPredicate{
+		nodeIncludedPredicate,
+		nodeUnTaintedPredicate,
+		nodeReadyPredicate,
 	}
 
 	stableNodeSetPredicates []NodeConditionPredicate = []NodeConditionPredicate{
@@ -1006,6 +1013,7 @@ var (
 		// excluded at that time and cause connections on said node to not
 		// connection drain.
 		nodeUnTaintedPredicate,
+		nodeNotTerminatingPredicate,
 	}
 )
 
@@ -1025,6 +1033,19 @@ func nodeUnTaintedPredicate(node *v1.Node) bool {
 	return true
 }
 
+const NodeTerminationCondition v1.NodeConditionType = "Terminating"
+
+// // Returns true if the node is not terminating, based on the Gardener condition.
+// // https://github.com/gardener/machine-controller-manager/blob/fc341881a5e71d7c5f240ca73415f967084aa85b/pkg/util/provider/machineutils/utils.go#L61
+func nodeNotTerminatingPredicate(node *v1.Node) bool {
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == NodeTerminationCondition {
+			return cond.Status != v1.ConditionTrue
+		}
+	}
+	return true
+}
+
 // We consider the node for load balancing only when its NodeReady condition status is ConditionTrue
 func nodeReadyPredicate(node *v1.Node) bool {
 	for _, cond := range node.Status.Conditions {
@@ -1033,6 +1054,13 @@ func nodeReadyPredicate(node *v1.Node) bool {
 		}
 	}
 	return false
+}
+
+func getNodePredicatesForService(service *v1.Service) []NodeConditionPredicate {
+	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
+		return etpLocalNodePredicates
+	}
+	return allNodePredicates
 }
 
 func nodeNotDeletedPredicate(node *v1.Node) bool {
